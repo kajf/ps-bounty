@@ -43,21 +43,21 @@ Environment:
 Setup limitations:
 
 - `./tools/install-powershell.sh` failed because its Debian helper rejected Ubuntu 24.04 as unsupported, so PowerShell was installed from Microsoft's Ubuntu 24.04 package feed instead.
-- `Start-PSBuild -UseNuGetOrg` initially failed after restoring core projects because the environment proxy returned HTTP 403 for PowerShell Gallery package lookup under `src/Modules/PSGalleryModules.csproj`.
-- `Start-PSBuild -UseNuGetOrg -NoPSModuleRestore` built the engine successfully after adding a local annotated tag. The tag was needed because `PowerShell.Common.props` invokes `git describe --abbrev=60 --long`, which fails in a shallow clone when no describing tag reaches `HEAD`.
+- `Start-PSBuild -UseNuGetOrg` without `-NoPSModuleRestore` fails in Codex Cloud because it rewrites module package sources to PowerShell Gallery, and the environment proxy returns HTTP 403 for `powershellgallery.com`/PowerShell Gallery CDN hosts.
+- The Codex Cloud workaround for a local research build is to use `Start-PSBuild -UseNuGetOrg -NoPSModuleRestore`, after pre-restoring the core projects; `-UseNuGetOrg` keeps core dependency restore on NuGet.org and skips PowerShell Gallery module packages. `research/scripts/build-powershell-in-codex-cloud.sh` automates this path. A local annotated tag may still be needed because `PowerShell.Common.props` invokes `git describe --abbrev=60 --long`, which fails in a shallow clone when no describing tag reaches `HEAD`.
 - `Start-PSPester` could not run the selected Pester file in this environment because publishing test helper modules also attempted to reach PowerShell Gallery and the built output did not contain a restored Pester module.
 
 ## Test/check results from this pass
 
 ```bash
-# PASS: core engine build, with PSGallery modules intentionally skipped due proxy limits.
+# PASS: core engine build that avoids blocked PowerShell Gallery module restore.
 PATH=$HOME/.dotnet:$PATH pwsh -NoLogo -NoProfile -Command 'Import-Module ./build.psm1; Start-PSBuild -UseNuGetOrg -NoPSModuleRestore'
 
-# WARNING: full/default build blocked by proxy 403 to powershellgallery.com for PSGalleryModules.csproj.
+# WARNING: full public-feed build blocked by proxy 403 to powershellgallery.com for PSGalleryModules.csproj.
 PATH=$HOME/.dotnet:$PATH pwsh -NoLogo -NoProfile -Command 'Import-Module ./build.psm1; Start-PSBuild -UseNuGetOrg'
 
-# WARNING: focused Pester run blocked by proxy/Pester restore limitations.
-PATH=$HOME/.dotnet:$PATH pwsh -NoLogo -NoProfile -Command 'Import-Module ./build.psm1; Start-PSPester -Path test/powershell/Modules/Microsoft.PowerShell.Core/Import-Module.Tests.ps1 -BinDir ./src/powershell-unix/bin/Debug/net11.0/linux-x64/publish -UseNuGetOrg -PassThru'
+# WARNING: focused Pester run can still be blocked if it saves Pester directly from PowerShell Gallery.
+PATH=$HOME/.dotnet:$PATH pwsh -NoLogo -NoProfile -Command 'Import-Module ./build.psm1; Start-PSPester -Path test/powershell/Modules/Microsoft.PowerShell.Core/Import-Module.Tests.ps1 -BinDir ./src/powershell-unix/bin/Debug/net11.0/linux-x64/publish -PassThru'
 
 # PASS: local module path precedence fixture demonstrates expected behavior, not a vulnerability.
 ./upstream/PowerShell/src/powershell-unix/bin/Debug/net11.0/linux-x64/publish/pwsh -NoLogo -NoProfile -File research/repros/module-path-shadowing.ps1
@@ -100,7 +100,7 @@ PATH=$HOME/.dotnet:$PATH pwsh -NoLogo -NoProfile -Command 'Import-Module ./build
 
 - **PSModulePath shadowing**: Reproduced that earlier entries win during implicit autoload. This is expected module search-order behavior and requires attacker influence over the victim process environment or a writable earlier path. Classified as local/user-configuration dependent and not a bounty-quality issue.
 - **New-TemporaryFile disclosure**: Checked local Unix permissions. The file was owner-only (`600`), so no default cross-user disclosure was observed.
-- **Full build/test inability**: Gallery access was blocked by the environment proxy for `powershellgallery.com`, affecting PSGallery module restore and Pester setup. This is an environment limitation, not a PowerShell vulnerability.
+- **Codex Cloud PowerShell Gallery 403**: Gallery access is blocked by the environment proxy for `powershellgallery.com`. The reliable local research build is `Start-PSBuild -UseNuGetOrg -NoPSModuleRestore`; fully packaged builds and Pester dependency restoration still require a different network, a pre-populated cache, or a vetted local mirror for gallery modules.
 - **Archive extraction in core repo**: `Expand-Archive` implementation is not in the core `PowerShell/PowerShell` source tree reviewed here; it is packaged from `Microsoft.PowerShell.Archive`. This should be audited in a separate clone if archive behavior remains a priority.
 - **Implicit-remoting temp path collision**: The path construction is notable but includes the per-runspace GUID. No credible non-local or privilege-crossing exploit was validated in this pass.
 
@@ -120,4 +120,4 @@ No validated, reproducible, in-scope vulnerability was found in this initial set
 2. Continue deep review of `ImportModuleCommand` and `ModuleCmdletBase` for manifest fields that cross language-mode or policy boundaries.
 3. Exercise constrained language mode test suites locally once Pester dependencies are available without PowerShell Gallery proxy failures.
 4. Review GitHub Actions artifact download/extraction paths with event trigger trust levels, especially any PR-controlled artifact names or paths.
-5. Re-run focused Pester suites in a network environment that can restore PowerShell Gallery dependencies, or vendor the exact test dependencies in a local cache.
+5. Re-run focused Pester suites after vendoring exact test dependencies, pre-populating the required caches, or moving to a network where PowerShell Gallery package restores are allowed.
